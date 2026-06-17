@@ -1,4 +1,4 @@
-name: Deploy to EC2
+name: Build, Push and Deploy
 
 on:
   push:
@@ -6,40 +6,73 @@ on:
       - master
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy on EC2
-        uses: appleboy/ssh-action@master
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Login to Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Build and push frontend
+      - name: Build Frontend Image
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/sleeky-frontend:latest ./sleeky-frontend
+
+      - name: Push Frontend Image
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/sleeky-frontend:latest
+
+      # Build and push backend
+      - name: Build Backend Image
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/sleeky-backend:latest ./sleeky-backend
+
+      - name: Push Backend Image
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/sleeky-backend:latest
+
+      # Deploy on EC2
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            echo "Pulling latest images..."
 
-            # Pull latest frontend image
-            docker pull sowmiyakumar/sleeky-frontend:latest
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/sleeky-frontend:latest
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/sleeky-backend:latest
 
-            # Stop & remove old frontend container
+            echo "Stopping old containers..."
+
             docker stop sleeky-frontend || true
             docker rm sleeky-frontend || true
 
-            # Run frontend container
-            docker run -d \
-              --name sleeky-frontend \
-              -p 3000:80 \
-              sowmiyakumar/sleeky-frontend:latest
-
-            # Pull latest backend image
-            docker pull sowmiyakumar/sleeky-backend:latest
-
-            # Stop & remove old backend container
             docker stop sleeky-backend || true
             docker rm sleeky-backend || true
 
-            # Run backend container
+            echo "Starting frontend container..."
+
+            docker run -d \
+              --name sleeky-frontend \
+              --restart unless-stopped \
+              -p 3000:80 \
+              ${{ secrets.DOCKERHUB_USERNAME }}/sleeky-frontend:latest
+
+            echo "Starting backend container..."
+
             docker run -d \
               --name sleeky-backend \
+              --restart unless-stopped \
               -p 8080:80 \
-              sowmiyakumar/sleeky-backend:latest
+              ${{ secrets.DOCKERHUB_USERNAME }}/sleeky-backend:latest
+
+            echo "Deployment completed."
